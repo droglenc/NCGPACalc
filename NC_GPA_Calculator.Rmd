@@ -19,9 +19,10 @@ rmarkdown::render("NC_GPA_Calculator.Rmd","pdf_document",
 
 
 ```{r setup, include=FALSE}
-## Set knitr options
+## Set knitr and R options
 knitr::opts_chunk$set(echo=FALSE,message=FALSE,warning=FALSE,comment="",
                       fig.width=4.25,fig.height=2.75)
+options(width=120)
 
 ## Load packages
 library(readxl)
@@ -35,37 +36,39 @@ grdltrs <- c("A","A-","B+","B","B-","C+","C","C-","D+","D",
              "F","I","AU","W","S","U")
 grdpts <- c(4,3.7,3.3,3,2.7,2.3,2,1.7,1.3,1,
             0,0,0,0,0,0)
-sems <- c("SU","F","W","S")
+sems <- c("TR","SU","F","W","S")
 yrs <- 10:25
-trmord <- c("TRANSFER",paste0(rep(sems,length(yrs)),
-                              rep(yrs,each=length(sems))))
+trmord <- paste0(rep(sems,length(yrs)),rep(yrs,each=length(sems)))
 
 ## Plotting options
 clrs <- c("black","steelblue3")
 theme_set(theme_bw())
 ```
 ```{r prepData, include=FALSE}
-## Credits = "attempted credits" ... credits for classes enrolled in
-## GPACr = "gpa credits" ... for computing GPA (excluded W, I, AU, S, U)
-## GPACr2 = "career gpa credits" ... GPACr adjusted for repeated courses
-## EarnedCr = "earned credits" ... AttemptCr w/0 W, I, AU, F
-## EarnedCr2 = "career earned credits" ... EarnedCr adjusted for repeated courses
+## Credits = "term attempted credits" ... credits for classes enrolled in
+## EarnCr = "term earned credits" ... Credits w/0 W, I, AU, F
+## GPACr = "term gpa credits" ... for computing GPA (excluded W, I, AU, S, U)
+## QPts = "term quality points" ... grade * credits
 ##
-## QPts = "quality points" ... grade * credits
+## AttCr2 = "career attempted credits" ... Credits adusted for repeated courses
+## EarnCr2 = "career earned credits" ... EarnedCr adjusted for repeated courses
+## GPACr2 = "career gpa credits" ... GPACr adjusted for repeated courses
 ## QPts2 = "career quality points" ... QPts adjusted for repeated courses
 ##
 d <- read_excel(fn,col_types=c("numeric","text","text","numeric","text",
                                "text","text","text","text")) %>%
-  mutate(Term=paste0(Sem,AY-2000),
-         Term=ifelse(capFirst(Sem)=="Transfer","TRANSFER",Term),
-         Term=droplevels(ordered(Term,levels=trmord)),
-         EarnedCr=ifelse(Grade %in% c("F","I","AU","W"),0,Credits),
-         EarnedCr2=ifelse(is.na(Repeated),EarnedCr,0),
+  rename(Maj1=Major1,Maj2=Major2,Reptd=Repeated) %>%
+  mutate(AY=AY-2000,
+         Sem=ifelse(capFirst(Sem)=="Transfer","TR",Sem),
+         Term=droplevels(ordered(paste0(Sem,AY),levels=trmord)),
+         EarnCr=ifelse(Grade %in% c("F","I","AU","W"),0,Credits),
          GPACr=ifelse(Grade %in% c("I","AU","W","S","U"),0,Credits),
-         GPACr2=ifelse(is.na(Repeated),GPACr,0),
          QPts=mapvalues(Grade,from=grdltrs,grdpts,warn_missing=FALSE),
          QPts=as.numeric(QPts)*Credits,
-         QPts2=ifelse(is.na(Repeated),QPts,0)) %>%
+         AttCr2=ifelse(is.na(Reptd) | Grade %in% c("W","I"),Credits,0),
+         EarnCr2=ifelse(is.na(Reptd),EarnCr,0),
+         GPACr2=ifelse(is.na(Reptd),GPACr,0),
+         QPts2=ifelse(is.na(Reptd),QPts,0)) %>%
   select(-AY,-Sem) %>%
   arrange(Term,Course)
 
@@ -73,8 +76,8 @@ d <- read_excel(fn,col_types=c("numeric","text","text","numeric","text",
 if (is.null(lastterm)) lastterm <- levels(d$Term)[length(levels(d$Term))]
 
 ## Determine if major information is provided
-doMajor1 <- any(!is.na(d$Major1))
-doMajor2 <- any(!is.na(d$Major2))
+doMaj1 <- any(!is.na(d$Maj1))
+doMaj2 <- any(!is.na(d$Maj2))
 ```
 
 
@@ -89,7 +92,9 @@ doMajor2 <- any(!is.na(d$Major2))
 ```{r}
 tmp <- d %>%
   filterD(Term>ordered(lastterm,levels(Term))) %>%
-  select(Term,Course,Major1,Major2,Credits,Grade,Repeated,Notes) %>%
+  select(Term,Course,AttCr2,EarnCr2,GPACr2,Grade,QPts2,Reptd,Maj1,Maj2,Notes) %>%
+  rename(Att_Cr=AttCr2,Earn_Cr=EarnCr2,GPA_Cr=GPACr2,Q_Pts=QPts2) %>%
+  arrange(Term,Maj1,Maj2,Course) %>%
   as.data.frame()
 for (i in levels(tmp$Term)) {
   print(filterD(tmp,Term==i),row.names=FALSE,na.print="")
@@ -105,27 +110,28 @@ for (i in levels(tmp$Term)) {
 ## Overall (all courses) summary
 dsum1 <- d %>%
   group_by(Term) %>%
-  summarize(tAttemptCr=sum(Credits,na.rm=TRUE),
-            tEarnedCr=sum(EarnedCr,na.rm=TRUE),
-            tEarnedCr2=sum(EarnedCr2,na.rm=TRUE),
+  summarize(tAttCr=sum(Credits,na.rm=TRUE),
+            tEarnCr=sum(EarnCr,na.rm=TRUE),
             tGPACr=sum(GPACr,na.rm=TRUE),
-            tGPACr2=sum(GPACr2,na.rm=TRUE),
             tQPts=sum(QPts,na.rm=TRUE),
+            tAttCr2=sum(AttCr2,na.rm=TRUE),
+            tEarnCr2=sum(EarnCr2,na.rm=TRUE),
+            tGPACr2=sum(GPACr2,na.rm=TRUE),
             tQPts2=sum(QPts2,na.rm=TRUE)) %>%
   mutate(tGPA=ifelse(tGPACr==0,0,tQPts/tGPACr),
-         cAttemptCr=cumsum(tAttemptCr),
-         cEarnedCr=cumsum(tEarnedCr2),
+         cAttCr=cumsum(tAttCr2),
+         cEarnCr=cumsum(tEarnCr2),
          cGPACr=cumsum(tGPACr2),
          cQPts=cumsum(tQPts2),
          cGPA=ifelse(cGPACr==0,0,cQPts/cGPACr),
          Projected=Term>ordered(lastterm,levels(Term))) %>%
-  select(Term,Projected,tAttemptCr,tEarnedCr,tGPACr,tQPts,tGPA,
-         cAttemptCr,cEarnedCr,cGPACr,cQPts,cGPA)
+  select(Term,Projected,tAttCr,tEarnCr,tGPACr,tQPts,tGPA,
+         cAttCr,cEarnCr,cGPACr,cQPts,cGPA)
 ```
 
 ```{r CareerGPAPlot}
-pCGPA <- dsum1 %>%
-  filterD(Term!="TRANSFER") %>%
+tmp <- filter(dsum1,!grepl("TR",Term))
+pCGPA <- tmp %>%
   ggplot(aes(x=Term,y=cGPA,group=1,color=Projected)) +
   geom_hline(yintercept=2.0,color="red",linetype="dashed") +
   geom_line(size=0.8) +
@@ -135,7 +141,7 @@ pCGPA <- dsum1 %>%
   scale_y_continuous("Career Overall GPA",expand=c(0,0.5)) +
   guides(color=FALSE)
 pCGPA + 
-  geom_text(data=top_n(dsum1,1,wt=Term),
+  geom_text(data=top_n(tmp,1,wt=Term),
             aes(x=Term,label=formatC(cGPA,format="f",digits=4)),
             size=3,nudge_y=0.1)
 ```
@@ -143,46 +149,46 @@ pCGPA +
 ```{r CreditsPlot}
 dsum1 %>%
   top_n(8,wt=Term) %>%
-  ggplot(aes(x=Term,y=cEarnedCr,fill=Projected)) +
+  ggplot(aes(x=Term,y=cEarnCr,fill=Projected)) +
   geom_bar(stat="identity") +
   scale_fill_manual(values=clrs) +
   scale_y_continuous("Career Earned Credits",limits=c(0,150),
                      expand=c(0,0)) +
   geom_hline(yintercept=124,color="red",linetype="dashed") +
   guides(fill=FALSE) +
-  geom_text(data=top_n(dsum1,1,wt=Term),aes(x=Term,label=cEarnedCr),
+  geom_text(data=top_n(dsum1,1,wt=Term),aes(x=Term,label=cEarnCr),
             size=3,nudge_y=5)
 ```
 
-```{r Major1Sum, eval=doMajor1}
+```{r Maj1Sum, eval=doMaj1}
 ## Major courses summary
 dsumMjr1 <- d %>%
-  filter(Major1 %in% c("YES","Yes","yes")) %>%
+  filter(Maj1 %in% c("YES","Yes","yes")) %>%
   group_by(Term) %>%
-  summarize(tAttemptCr=sum(Credits,na.rm=TRUE),
-            tEarnedCr=sum(EarnedCr,na.rm=TRUE),
-            tEarnedCr2=sum(EarnedCr2,na.rm=TRUE),
+  summarize(tAttCr=sum(Credits,na.rm=TRUE),
+            tEarnCr=sum(EarnCr,na.rm=TRUE),
+            tEarnCr2=sum(EarnCr2,na.rm=TRUE),
             tGPACr=sum(GPACr,na.rm=TRUE),
             tGPACr2=sum(GPACr2,na.rm=TRUE),
             tQPts=sum(QPts,na.rm=TRUE),
             tQPts2=sum(QPts2,na.rm=TRUE)) %>%
   mutate(tGPA=ifelse(tGPACr==0,0,tQPts/tGPACr),
-         cAttemptCr=cumsum(tAttemptCr),
-         cEarnedCr=cumsum(tEarnedCr2),
+         cAttCr=cumsum(tAttCr),
+         cEarnCr=cumsum(tEarnCr2),
          cGPACr=cumsum(tGPACr2),
          cQPts=cumsum(tQPts2),
          cGPA=ifelse(cGPACr==0,0,cQPts/cGPACr),
          Projected=Term>ordered(lastterm,levels(Term))) %>%
-  select(Term,Projected,tAttemptCr,tEarnedCr,tGPACr,tQPts,tGPA,
-         cAttemptCr,cEarnedCr,cGPACr,cQPts,cGPA)
+  select(Term,Projected,tAttCr,tEarnCr,tGPACr,tQPts,tGPA,
+         cAttCr,cEarnCr,cGPACr,cQPts,cGPA)
 ```
 
-```{r Major1GPAPlot, eval=doMajor1}
+```{r Maj1GPAPlot, eval=doMaj1}
+tmp <- filterD(dsumMjr1,!grepl("TR",Term))
 pCGPA %+% 
-  filterD(dsumMjr1,Term!="TRANSFER") +
-  geom_text(data=top_n(dsumMjr1,1,wt=Term),
-            aes(x=Term,Y=cGPA,group=1,label=formatC(cGPA,format="f",
-                                                    digits=4)),
+  tmp +
+  geom_text(data=top_n(tmp,1,wt=Term),
+            aes(x=Term,group=1,label=formatC(cGPA,format="f",digits=4)),
             size=3,nudge_y=0.1)
 ```
 
@@ -190,21 +196,23 @@ pCGPA %+%
 
 ## Major GPA Details
 
-```{r MajorTranscript, eval=doMajor1}
-dmajor1 <- dsumMjr1 %>%
-  mutate(Type="Major1") %>% 
-  select(Term,Type,cAttemptCr,cEarnedCr,cGPACr,cQPts,cGPA,Projected) %>%
+```{r MajorTranscript, eval=doMaj1}
+## Print course-level summaries for courses in major
+d %>%
+  filterD(capFirst(Maj1)=="Yes") %>%
+  select(Term,Course,AttCr2,EarnCr2,GPACr2,Grade,QPts2,Reptd,Maj1,Maj2,Notes) %>%
+  rename(Att_Cr=AttCr2,Earn_Cr=EarnCr2,GPA_Cr=GPACr2,Q_Pts=QPts2) %>%
+  as.data.frame() %>%
+  print(row.names=FALSE,na.print="")
+
+# Find and print career summaries at end of each term for major courses
+csumMjr1 <- dsumMjr1 %>%
+  mutate(Type="Maj1") %>% 
+  select(Term,Type,cAttCr,cEarnCr,cGPACr,cQPts,cGPA,Projected) %>%
   as.data.frame()
-names(dmajor1) <- c("Term","Type","Att Cr","Earn Cr",
+names(csumMjr1) <- c("Term","Type","Att Cr","Earn Cr",
                     "GPA Cr","Qaul Pts","GPA","Projected")
-
-dmjr <- d %>%
-  filterD(Major1 %in% c("YES","Yes","yes")) %>%
-  select(Term,Course,Major1,Major2,Credits,Grade,Repeated,Notes) %>%
-  as.data.frame()
-
-print(dmjr,row.names=FALSE,na.print="")
-print(dmajor1,row.names=FALSE,na.print="")
+print(csumMjr1,row.names=FALSE,na.print="")
 ```
 
 \newpage
@@ -215,33 +223,35 @@ print(dmajor1,row.names=FALSE,na.print="")
 ## All of this is for interleaving term, major, and career info
 dterm <- dsum1 %>%
   mutate(Type="Term") %>% 
-  select(Term,Type,tAttemptCr,tEarnedCr,tGPACr,tQPts,tGPA,Projected)
+  select(Term,Type,tAttCr,tEarnCr,tGPACr,tQPts,tGPA,Projected)
 dcareer <- dsum1 %>%
   mutate(Type="Career") %>% 
-  select(Term,Type,cAttemptCr,cEarnedCr,cGPACr,cQPts,cGPA,Projected)
+  select(Term,Type,cAttCr,cEarnCr,cGPACr,cQPts,cGPA,Projected)
 names(dterm) <- names(dcareer) <- c("Term","Type","Att Cr","Earn Cr",
                                     "GPA Cr","Qaul Pts","GPA","Projected")
 dsum3 <- rbind(dterm,dcareer)
 
-if (doMajor1) dsum3 <- rbind(dsum3,dmajor1)
+if (doMaj1) dsum3 <- rbind(dsum3,csumMjr1)
 
-if (doMajor2) {
-  dmajor2 <- dsumMjr2 %>%
-    mutate(Type="Major2") %>% 
-    select(Term,Type,cAttemptCr,cEarnedCr,cGPACr,cQPts,cGPA,Projected)
-    names(dmajor2) <- names(dsum3)
-    dsum3 <- rbind(dsum3,dmajor2)
+if (doMaj2) {
+  csumMjr2 <- dsumMjr2 %>%
+    mutate(Type="Maj2") %>% 
+    select(Term,Type,cAttCr,cEarnCr,cGPACr,cQPts,cGPA,Projected)
+    names(csumMjr2) <- names(dsum3)
+    dsum3 <- rbind(dsum3,csumMjr2)
 }
 
 dsum3 %<>%
   mutate(Term=droplevels(ordered(Term,levels=trmord))) %>%
   arrange(Term,desc(Type)) %>%
-  filter(!(Term=="TRANSFER" & Type=="Term")) %>%
+  filter(!(grepl("TR",Term) & Type=="Term")) %>%
   select(-Projected) %>%
   as.data.frame()
 
 d2 <- d %>%
-  select(Term,Course,Major1,Major2,Credits,Grade,Repeated,Notes) %>%
+  select(Term,Course,AttCr2,EarnCr2,GPACr2,Grade,QPts2,Reptd,Maj1,Maj2,Notes) %>%
+  rename(Att_Cr=AttCr2,Earn_Cr=EarnCr2,GPA_Cr=GPACr2,Q_Pts=QPts2) %>%
+  arrange(Term,Maj1,Maj2) %>%
   as.data.frame()
 
 for (i in levels(d2$Term)) {
