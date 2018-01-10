@@ -1,0 +1,256 @@
+---
+title: "GPA Projection"
+---
+
+```{r setStudent, include=FALSE}
+## ENTER file name, student's name, and last term of observed
+##   grades (NULL if no projections) here
+fn <- "Student1Grades.xlsx"
+sn <- "Student One"
+lastterm <- NULL
+```
+```{r echo=FALSE, eval=FALSE}
+## Save file and run (CTRL-ALT-C) previous and this to create doc
+rmarkdown::render("NC_GPA_Calculator.Rmd","pdf_document",
+                  paste0(sn,"_",format(Sys.time(),'%d_%b_%y'),".pdf")) 
+```
+
+
+
+
+```{r setup, include=FALSE}
+## Set knitr options
+knitr::opts_chunk$set(echo=FALSE,message=FALSE,warning=FALSE,comment="",
+                      fig.width=4.25,fig.height=2.75)
+
+## Load packages
+library(readxl)
+library(FSA)
+library(dplyr)
+library(magrittr)
+library(ggplot2)
+
+## Setup Grade Points
+grdltrs <- c("A","A-","B+","B","B-","C+","C","C-","D+","D",
+             "F","I","AU","W","S","U")
+grdpts <- c(4,3.7,3.3,3,2.7,2.3,2,1.7,1.3,1,
+            0,0,0,0,0,0)
+sems <- c("SU","F","W","S")
+yrs <- 10:25
+trmord <- c("TRANSFER",paste0(rep(sems,length(yrs)),
+                              rep(yrs,each=length(sems))))
+
+## Plotting options
+clrs <- c("black","steelblue3")
+theme_set(theme_bw())
+```
+```{r prepData, include=FALSE}
+## Credits = "attempted credits" ... credits for classes enrolled in
+## GPACr = "gpa credits" ... for computing GPA (excluded W, I, AU, S, U)
+## GPACr2 = "career gpa credits" ... GPACr adjusted for repeated courses
+## EarnedCr = "earned credits" ... AttemptCr w/0 W, I, AU, F
+## EarnedCr2 = "career earned credits" ... EarnedCr adjusted for repeated courses
+##
+## QPts = "quality points" ... grade * credits
+## QPts2 = "career quality points" ... QPts adjusted for repeated courses
+##
+d <- read_excel(fn,col_types=c("numeric","text","text","numeric","text",
+                               "text","text","text","text")) %>%
+  mutate(Term=paste0(Sem,AY-2000),
+         Term=ifelse(capFirst(Sem)=="Transfer","TRANSFER",Term),
+         Term=droplevels(ordered(Term,levels=trmord)),
+         EarnedCr=ifelse(Grade %in% c("F","I","AU","W"),0,Credits),
+         EarnedCr2=ifelse(is.na(Repeated),EarnedCr,0),
+         GPACr=ifelse(Grade %in% c("I","AU","W","S","U"),0,Credits),
+         GPACr2=ifelse(is.na(Repeated),GPACr,0),
+         QPts=mapvalues(Grade,from=grdltrs,grdpts,warn_missing=FALSE),
+         QPts=as.numeric(QPts)*Credits,
+         QPts2=ifelse(is.na(Repeated),QPts,0)) %>%
+  select(-AY,-Sem) %>%
+  arrange(Term,Course)
+
+## Find lastterm if is.null(lastterm)
+if (is.null(lastterm)) lastterm <- levels(d$Term)[length(levels(d$Term))]
+
+## Determine if major information is provided
+doMajor1 <- any(!is.na(d$Major1))
+doMajor2 <- any(!is.na(d$Major2))
+```
+
+
+## Notes
+
+* **Student**: `r sn`.
+* **Date**: `r format(Sys.time(), '%A %B %d %Y, %X')`.
+* **Last Term of Observed Grades**: `r lastterm`.
+* **File**: `r basename(fn)`.
+* GPA and earned credit projections assume the following:
+
+```{r}
+tmp <- d %>%
+  filterD(Term>ordered(lastterm,levels(Term))) %>%
+  select(Term,Course,Major1,Major2,Credits,Grade,Repeated,Notes) %>%
+  as.data.frame()
+for (i in levels(tmp$Term)) {
+  print(filterD(tmp,Term==i),row.names=FALSE,na.print="")
+  cat("\n")
+}
+```
+
+\newpage
+
+## Projections
+
+```{r TotalSum, include=FALSE}
+## Overall (all courses) summary
+dsum1 <- d %>%
+  group_by(Term) %>%
+  summarize(tAttemptCr=sum(Credits,na.rm=TRUE),
+            tEarnedCr=sum(EarnedCr,na.rm=TRUE),
+            tEarnedCr2=sum(EarnedCr2,na.rm=TRUE),
+            tGPACr=sum(GPACr,na.rm=TRUE),
+            tGPACr2=sum(GPACr2,na.rm=TRUE),
+            tQPts=sum(QPts,na.rm=TRUE),
+            tQPts2=sum(QPts2,na.rm=TRUE)) %>%
+  mutate(tGPA=ifelse(tGPACr==0,0,tQPts/tGPACr),
+         cAttemptCr=cumsum(tAttemptCr),
+         cEarnedCr=cumsum(tEarnedCr2),
+         cGPACr=cumsum(tGPACr2),
+         cQPts=cumsum(tQPts2),
+         cGPA=ifelse(cGPACr==0,0,cQPts/cGPACr),
+         Projected=Term>ordered(lastterm,levels(Term))) %>%
+  select(Term,Projected,tAttemptCr,tEarnedCr,tGPACr,tQPts,tGPA,
+         cAttemptCr,cEarnedCr,cGPACr,cQPts,cGPA)
+```
+
+```{r CareerGPAPlot}
+pCGPA <- dsum1 %>%
+  filterD(Term!="TRANSFER") %>%
+  ggplot(aes(x=Term,y=cGPA,group=1,color=Projected)) +
+  geom_hline(yintercept=2.0,color="red",linetype="dashed") +
+  geom_line(size=0.8) +
+  geom_point(size=1.5,fill="white",pch=21) +
+  scale_color_manual(values=clrs) +
+  scale_x_discrete("Term") +
+  scale_y_continuous("Career Overall GPA",expand=c(0,0.5)) +
+  guides(color=FALSE)
+pCGPA + 
+  geom_text(data=top_n(dsum1,1,wt=Term),
+            aes(x=Term,label=formatC(cGPA,format="f",digits=4)),
+            size=3,nudge_y=0.1)
+```
+
+```{r CreditsPlot}
+dsum1 %>%
+  top_n(8,wt=Term) %>%
+  ggplot(aes(x=Term,y=cEarnedCr,fill=Projected)) +
+  geom_bar(stat="identity") +
+  scale_fill_manual(values=clrs) +
+  scale_y_continuous("Career Earned Credits",limits=c(0,150),
+                     expand=c(0,0)) +
+  geom_hline(yintercept=124,color="red",linetype="dashed") +
+  guides(fill=FALSE) +
+  geom_text(data=top_n(dsum1,1,wt=Term),aes(x=Term,label=cEarnedCr),
+            size=3,nudge_y=5)
+```
+
+```{r Major1Sum, eval=doMajor1}
+## Major courses summary
+dsumMjr1 <- d %>%
+  filter(Major1 %in% c("YES","Yes","yes")) %>%
+  group_by(Term) %>%
+  summarize(tAttemptCr=sum(Credits,na.rm=TRUE),
+            tEarnedCr=sum(EarnedCr,na.rm=TRUE),
+            tEarnedCr2=sum(EarnedCr2,na.rm=TRUE),
+            tGPACr=sum(GPACr,na.rm=TRUE),
+            tGPACr2=sum(GPACr2,na.rm=TRUE),
+            tQPts=sum(QPts,na.rm=TRUE),
+            tQPts2=sum(QPts2,na.rm=TRUE)) %>%
+  mutate(tGPA=ifelse(tGPACr==0,0,tQPts/tGPACr),
+         cAttemptCr=cumsum(tAttemptCr),
+         cEarnedCr=cumsum(tEarnedCr2),
+         cGPACr=cumsum(tGPACr2),
+         cQPts=cumsum(tQPts2),
+         cGPA=ifelse(cGPACr==0,0,cQPts/cGPACr),
+         Projected=Term>ordered(lastterm,levels(Term))) %>%
+  select(Term,Projected,tAttemptCr,tEarnedCr,tGPACr,tQPts,tGPA,
+         cAttemptCr,cEarnedCr,cGPACr,cQPts,cGPA)
+```
+
+```{r Major1GPAPlot, eval=doMajor1}
+pCGPA %+% 
+  filterD(dsumMjr1,Term!="TRANSFER") +
+  geom_text(data=top_n(dsumMjr1,1,wt=Term),
+            aes(x=Term,Y=cGPA,group=1,label=formatC(cGPA,format="f",
+                                                    digits=4)),
+            size=3,nudge_y=0.1)
+```
+
+\newpage
+
+## Major GPA Details
+
+```{r MajorTranscript, eval=doMajor1}
+dmajor1 <- dsumMjr1 %>%
+  mutate(Type="Major1") %>% 
+  select(Term,Type,cAttemptCr,cEarnedCr,cGPACr,cQPts,cGPA,Projected) %>%
+  as.data.frame()
+names(dmajor1) <- c("Term","Type","Att Cr","Earn Cr",
+                    "GPA Cr","Qaul Pts","GPA","Projected")
+
+dmjr <- d %>%
+  filterD(Major1 %in% c("YES","Yes","yes")) %>%
+  select(Term,Course,Major1,Major2,Credits,Grade,Repeated,Notes) %>%
+  as.data.frame()
+
+print(dmjr,row.names=FALSE,na.print="")
+print(dmajor1,row.names=FALSE,na.print="")
+```
+
+\newpage
+
+# Transcript Details
+
+```{r Transcript}
+## All of this is for interleaving term, major, and career info
+dterm <- dsum1 %>%
+  mutate(Type="Term") %>% 
+  select(Term,Type,tAttemptCr,tEarnedCr,tGPACr,tQPts,tGPA,Projected)
+dcareer <- dsum1 %>%
+  mutate(Type="Career") %>% 
+  select(Term,Type,cAttemptCr,cEarnedCr,cGPACr,cQPts,cGPA,Projected)
+names(dterm) <- names(dcareer) <- c("Term","Type","Att Cr","Earn Cr",
+                                    "GPA Cr","Qaul Pts","GPA","Projected")
+dsum3 <- rbind(dterm,dcareer)
+
+if (doMajor1) dsum3 <- rbind(dsum3,dmajor1)
+
+if (doMajor2) {
+  dmajor2 <- dsumMjr2 %>%
+    mutate(Type="Major2") %>% 
+    select(Term,Type,cAttemptCr,cEarnedCr,cGPACr,cQPts,cGPA,Projected)
+    names(dmajor2) <- names(dsum3)
+    dsum3 <- rbind(dsum3,dmajor2)
+}
+
+dsum3 %<>%
+  mutate(Term=droplevels(ordered(Term,levels=trmord))) %>%
+  arrange(Term,desc(Type)) %>%
+  filter(!(Term=="TRANSFER" & Type=="Term")) %>%
+  select(-Projected) %>%
+  as.data.frame()
+
+d2 <- d %>%
+  select(Term,Course,Major1,Major2,Credits,Grade,Repeated,Notes) %>%
+  as.data.frame()
+
+for (i in levels(d2$Term)) {
+  cat("====== Term:",ifelse(i>ordered(lastterm,levels(d2$Term)),
+                        paste(i,"***PROJECTED*** "),
+                        paste(i,"")),rep("=",50),"\n",sep="")
+  print(filterD(d2,Term==i)[,-1],row.names=FALSE,na.print="",digits=4)
+  cat("----\n")
+  print(filterD(dsum3,Term==i)[,-1],row.names=FALSE,na.print="",digits=4)
+  cat("\n\n")
+}
+```
